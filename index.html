@@ -49,13 +49,39 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
 
   <div class="panel">
     <div class="row" style="align-items:center;justify-content:space-between">
-      <div><h3 style="margin:0 0 5px">Audit results</h3><span id="summary" class="muted">Run Preview / Audit to inspect the file.</span></div>
+      <div><h3 style="margin:0 0 5px">Claim-level validation</h3><span class="muted">Each CLM claim is checked independently against the LX service lines inside that claim.</span><div id="claimSummary" class="muted" style="margin-top:6px">Pending - 0</div></div>
+    </div>
+    <div class="tablewrap" style="margin-top:14px">
+      <table>
+        <thead><tr><th>#</th><th>Claim ID (CLM01)</th><th>CLM02</th><th>Total LX billed</th><th>Difference</th><th>Claim HCP02</th><th>Total LX HCP02</th><th>HCP difference</th><th>Status</th></tr></thead>
+        <tbody id="claimResults"><tr><td colspan="9" class="muted">No claims audited yet.</td></tr></tbody>
+      </table>
+    </div>
+    <p class="muted">Claim-level mismatches are reported for review. They do not automatically change CLM02 or service-line billed amounts. Service-line CAS adjustments remain a separate, user-approved download action.</p>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="align-items:center;justify-content:space-between">
+      <div><h3 style="margin:0 0 5px">ST / SE transaction validation</h3><span id="transactionSummary" class="muted">Checks SE01 segment count and ST02 / SE02 control-number matching.</span></div>
+    </div>
+    <div class="tablewrap" style="margin-top:14px">
+      <table>
+        <thead><tr><th>#</th><th>ST02 control #</th><th>SE02 control #</th><th>SE01 declared count</th><th>Actual count (ST through SE)</th><th>Count result</th><th>Control result</th><th>Transaction status</th></tr></thead>
+        <tbody id="transactionResults"><tr><td colspan="8" class="muted">No transactions audited yet.</td></tr></tbody>
+      </table>
+    </div>
+    <p class="muted">SE01 counts EDI segments, including ST and SE, but excludes GS/GE. Missing ST or SE segments are reported and never automatically repaired.</p>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="align-items:center;justify-content:space-between">
+      <div><h3 style="margin:0 0 5px">Service-line audit results</h3><span id="summary" class="muted">Run Preview / Audit to inspect the file.</span></div>
       <span id="typePill" class="pill">No file audited</span>
     </div>
     <div class="tablewrap" style="margin-top:14px">
       <table>
-        <thead><tr><th>#</th><th>Service line</th><th>Billed</th><th>Total SVD</th><th>Total CAS</th><th>Difference</th><th>CAS count</th><th>Status</th></tr></thead>
-        <tbody id="results"><tr><td colspan="8" class="muted">No results yet.</td></tr></tbody>
+        <thead><tr><th>#</th><th>Claim</th><th>Service line</th><th>Billed</th><th>Total SVD</th><th>Total CAS</th><th>Difference</th><th>CAS count</th><th>Status</th></tr></thead>
+        <tbody id="results"><tr><td colspan="9" class="muted">No results yet.</td></tr></tbody>
       </table>
     </div>
     <div class="actions">
@@ -70,7 +96,7 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  let originalText = null, fileName = "edi.txt", parsed = [], detectedType = "Unknown", audited = false;
+  let originalText = null, fileName = "edi.txt", parsed = [], claims = [], transactions = [], detectedType = "Unknown", audited = false;
   const money = (n, p=2) => Number(n).toFixed(p);
   const parseAmount = s => {
     if (s == null || !String(s).trim()) return null;
@@ -105,37 +131,106 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
   }
   function segmentId(raw) { return raw.replace(/~\s*$/, "").trim().split("*")[0].trim(); }
   function fields(raw) { return raw.replace(/~\s*$/, "").trim().split("*"); }
+  function validateTransactions(segs) {
+    const results = [];
+    let active = null, transactionNo = 0;
+    const finishMissingSE = () => {
+      if (!active) return;
+      results.push({index:active.index,stControl:active.stControl || "(blank)",seControl:"—",declaredCount:null,actualCount:active.actualCount,countStatus:"NO SE",controlStatus:"NO SE",status:"MISSING SE"});
+      active = null;
+    };
+    for (const seg of segs) {
+      const id = segmentId(seg.raw);
+      if (!id) continue;
+      const f = fields(seg.raw);
+      if (id === "ST") {
+        if (active) finishMissingSE();
+        transactionNo++;
+        active = {index:transactionNo,stControl:f[2] || "",actualCount:1};
+        continue;
+      }
+      if (id === "SE") {
+        if (!active) {
+          const declared = f[1] !== undefined && /^\d+$/.test(f[1]) ? Number(f[1]) : null;
+          results.push({index:++transactionNo,stControl:"—",seControl:f[2] || "(blank)",declaredCount:declared,actualCount:null,countStatus:"NO ST",controlStatus:"NO ST",status:"MISSING ST"});
+          continue;
+        }
+        active.actualCount++;
+        const declared = f[1] !== undefined && /^\d+$/.test(f[1]) ? Number(f[1]) : null;
+        const seControl = f[2] || "";
+        const countStatus = declared === null ? "INVALID SE01" : declared === active.actualCount ? "MATCH" : "MISMATCH";
+        const controlStatus = active.stControl && seControl && active.stControl === seControl ? "MATCH" : "MISMATCH";
+        const status = countStatus === "MATCH" && controlStatus === "MATCH" ? "MATCH" : "REVIEW";
+        results.push({index:active.index,stControl:active.stControl || "(blank)",seControl:seControl || "(blank)",declaredCount:declared,actualCount:active.actualCount,countStatus,controlStatus,status});
+        active = null;
+        continue;
+      }
+      if (active) active.actualCount++;
+    }
+    finishMissingSE();
+    return results;
+  }
   function audit() {
     if (originalText == null) { alert("Please select an EDI file first."); return; }
     const segs = splitSegments(originalText);
+    transactions = validateTransactions(segs);
     detectedType = $("type").value === "auto" ? detectType(originalText) : $("type").value;
     const serviceTag = detectedType === "837I" ? "SV2" : "SV1";
-    const rows = [];
-    let current = null, lineNo = 0;
-    const finish = () => { if (current) rows.push(current); current = null; };
+    const rows = [], claimRows = [];
+    let currentClaim = null, currentLine = null, lineNo = 0, claimNo = 0;
+    const finishLine = () => {
+      if (!currentLine) return;
+      currentLine.claimIndex = currentClaim ? currentClaim.index : 0;
+      currentLine.claimId = currentClaim ? currentClaim.id : "(claim not found)";
+      currentLine.line = ++lineNo;
+      rows.push(currentLine);
+      if (currentClaim) currentClaim.lines.push(currentLine);
+      currentLine = null;
+    };
+    const finishClaim = () => {
+      finishLine();
+      if (currentClaim) claimRows.push(currentClaim);
+      currentClaim = null;
+    };
     for (let i=0;i<segs.length;i++) {
       const s = segs[i], id = segmentId(s.raw), f = fields(s.raw);
-      if (id === "LX") { finish(); lineNo++; current = {line:lineNo, lxIndex:i, startIndex:i, endIndex:segs.length-1, billed:null, svd:[], cas:[], svIndex:null, casIndices:[], rawSegments:[]}; }
-      if (!current) continue;
-      current.endIndex = i; current.rawSegments.push(i);
-      if (id === serviceTag && current.svIndex === null) {
-        current.svIndex = i;
-        // SV1: SV102 charge (field index 2).
-        // SV2: SV203 charge (field index 3), after revenue code and procedure composite.
-        current.billed = parseAmount(id === "SV2" ? f[3] : f[2]);
-      } else if (id === "SVD") {
-        // SVD02 = paid amount
-        const n = parseAmount(f[2]); if (n !== null) current.svd.push(n);
-      } else if (id === "CAS") {
-        current.casIndices.push(i);
-        // CAS segments may contain multiple adjustment triplets: group, reason, amount.
-        for (let j=2;j+1<f.length;j+=3) {
-          const n = parseAmount(f[j+1]); if (n !== null) current.cas.push({segmentIndex:i, amountIndex:j+1, amount:n});
+      if (id === "CLM") {
+        finishClaim();
+        claimNo++;
+        currentClaim = {index:claimNo,id:f[1] || `Claim ${claimNo}`,billed:parseAmount(f[2]),hcp:null,lines:[],startIndex:i,endIndex:i};
+        continue;
+      }
+      if (currentClaim) currentClaim.endIndex = i;
+      if (id === "LX") {
+        finishLine();
+        currentLine = {lxNumber:parseAmount(f[1]) ?? (currentClaim ? currentClaim.lines.length+1 : rows.length+1),lxIndex:i,startIndex:i,endIndex:i,billed:null,svd:[],cas:[],svIndex:null,casIndices:[],rawSegments:[],hcp:null};
+        continue;
+      }
+      if (currentLine) {
+        currentLine.endIndex = i; currentLine.rawSegments.push(i);
+        if (id === serviceTag && currentLine.svIndex === null) {
+          currentLine.svIndex = i;
+          // SV1: SV102 (field 2); SV2: SV203 (field 3).
+          currentLine.billed = parseAmount(id === "SV2" ? f[3] : f[2]);
+        } else if (id === "HCP" && currentLine.hcp === null) {
+          // HCP02 in the service-line loop.
+          currentLine.hcp = parseAmount(f[2]);
+        } else if (id === "SVD") {
+          const n = parseAmount(f[2]); if (n !== null) currentLine.svd.push(n);
+        } else if (id === "CAS") {
+          currentLine.casIndices.push(i);
+          for (let j=2;j+1<f.length;j+=3) {
+            const n = parseAmount(f[j+1]);
+            if (n !== null) currentLine.cas.push({segmentIndex:i,amountIndex:j+1,amount:n});
+          }
         }
+      } else if (currentClaim && id === "HCP" && currentClaim.hcp === null) {
+        // First HCP02 outside an LX is treated as claim-level HCP02.
+        currentClaim.hcp = parseAmount(f[2]);
       }
     }
-    finish();
-    // Segment-level fallback: only service lines beginning with SV1/SV2 and not under LX are outside this tool's intended pattern.
+    finishClaim();
+
     parsed = rows.map(r => {
       const totalSvd = r.svd.reduce((a,b)=>a+b,0), totalCas = r.cas.reduce((a,b)=>a+b.amount,0);
       const difference = r.billed === null ? null : r.billed - totalSvd - totalCas;
@@ -147,23 +242,50 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
       else status = "SKIPPED — NO CAS";
       return {...r,totalSvd,totalCas,difference,status,createNewCAS:status==="PENDING" && r.cas.length===0};
     });
+    claims = claimRows.map(c => {
+      const lxBilled = c.lines.reduce((sum,r)=>sum+(r.billed ?? 0),0);
+      const lxHcp = c.lines.reduce((sum,r)=>sum+(r.hcp ?? 0),0);
+      const billedDifference = c.billed === null ? null : c.billed - lxBilled;
+      const hcpDifference = c.hcp === null ? null : c.hcp - lxHcp;
+      const billedStatus = c.billed === null ? "NO CLM02" : Math.abs(billedDifference) < 0.005 ? "MATCH" : "MISMATCH";
+      const hcpStatus = c.hcp === null ? "NO CLAIM HCP" : Math.abs(hcpDifference) < 0.005 ? "MATCH" : "MISMATCH";
+      return {...c,lxBilled,hcpTotal: c.lines.some(r=>r.hcp!==null) ? lxHcp : null,billedDifference,hcpDifference,billedStatus,hcpStatus,
+        status: billedStatus==="MATCH" && (hcpStatus==="MATCH" || hcpStatus==="NO CLAIM HCP") ? "MATCH" : "REVIEW"};
+    });
     audited = true; render();
+    const claimPending = claims.filter(c=>c.status!=="MATCH").length;
+    $("claimSummary").textContent = `Pending - ${claimPending}`;
+    const txGood = transactions.filter(t=>t.status==="MATCH").length;
+    $("transactionSummary").textContent = transactions.length ? `${transactions.length} transaction(s) found • ${txGood} fully matched • ${transactions.length-txGood} need review` : "No ST/SE transaction pair found in this file.";
     $("typePill").textContent = detectedType + (detectedType==="Unknown" ? " — check type" : "");
-    $("summary").textContent = `${parsed.length} LX service-line group(s) found • ${parsed.filter(r=>r.status==="MATCH").length} match • ${parsed.filter(r=>r.status==="PENDING").length} pending adjustment • ${parsed.filter(r=>r.status.startsWith("SKIPPED")).length} skipped`;
+    $("summary").textContent = `${claims.length} claim(s) found • ${parsed.length} LX service-line group(s) • ${parsed.filter(r=>r.status==="MATCH").length} line matches • ${parsed.filter(r=>r.status==="PENDING").length} pending CAS adjustment(s) • ${claims.filter(c=>c.status!=="MATCH").length} claim(s) need review`;
     $("applyBtn").disabled = !parsed.some(r=>r.status==="PENDING");
     $("csvBtn").disabled = false; $("backupBtn").disabled = false;
     $("fileInfo").textContent = `${fileName} • ${originalText.length.toLocaleString()} characters`;
   }
   function render() {
     const body = $("results"); body.innerHTML = "";
-    if (!parsed.length) { body.innerHTML='<tr><td colspan="8">No LX segments found. Confirm the file uses LX service-line groups.</td></tr>'; return; }
+    const claimBody = $("claimResults"); claimBody.innerHTML = "";
+    const txBody = $("transactionResults"); txBody.innerHTML = "";
     const p = Number($("precision").value);
+    if (!transactions.length) txBody.innerHTML = '<tr><td colspan="8" class="muted">No ST/SE transaction pair found.</td></tr>';
+    transactions.forEach(t => {
+      const tr=document.createElement("tr"); tr.className=t.status==="MATCH"?"good":"warn";
+      const vals=[t.index,t.stControl,t.seControl,t.declaredCount===null?"—":t.declaredCount,t.actualCount===null?"—":t.actualCount,t.countStatus,t.controlStatus,t.status];
+      vals.forEach(v=>{const td=document.createElement("td");td.textContent=v;tr.appendChild(td);}); txBody.appendChild(tr);
+    });
+    if (!claims.length) claimBody.innerHTML='<tr><td colspan="9">No CLM claim segments found.</td></tr>';
+    claims.forEach(c => {
+      const tr=document.createElement("tr"); tr.className=c.status==="MATCH"?"good":"warn";
+      const vals=[c.index,c.id,c.billed===null?"—":money(c.billed,p),money(c.lxBilled,p),c.billedDifference===null?"—":money(c.billedDifference,p),c.hcp===null?"—":money(c.hcp,p),c.hcpTotal===null?"—":money(c.hcpTotal,p),c.hcpDifference===null?"—":money(c.hcpDifference,p),`Billed: ${c.billedStatus} | HCP: ${c.hcpStatus}`];
+      vals.forEach(v=>{const td=document.createElement("td");td.textContent=v;tr.appendChild(td);}); claimBody.appendChild(tr);
+    });
+    if (!parsed.length) { body.innerHTML='<tr><td colspan="9">No LX segments found. Confirm the file uses LX service-line groups.</td></tr>'; return; }
     parsed.forEach((r,idx) => {
       const tr=document.createElement("tr");
       tr.className = r.status==="MATCH" ? "good" : (r.status==="PENDING" ? "warn" : "bad");
-      const vals=[idx+1,r.line,r.billed===null?"—":money(r.billed,p),money(r.totalSvd,p),money(r.totalCas,p),r.difference===null?"—":money(r.difference,p),r.casIndices.length,r.status];
-      vals.forEach(v=>{const td=document.createElement("td");td.textContent=v;tr.appendChild(td);});
-      body.appendChild(tr);
+      const vals=[idx+1,r.claimId,`LX ${r.lxNumber}`,r.billed===null?"—":money(r.billed,p),money(r.totalSvd,p),money(r.totalCas,p),r.difference===null?"—":money(r.difference,p),r.casIndices.length,r.status];
+      vals.forEach(v=>{const td=document.createElement("td");td.textContent=v;tr.appendChild(td);}); body.appendChild(tr);
     });
   }
   function applyAdjustments() {
@@ -279,9 +401,12 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
   }
   function csvEscape(v) { return `"${String(v??"").replace(/"/g,'""')}"`; }
   function downloadCSV() {
-    const headers=["LX line","Billed","Total SVD","Total CAS","Difference","CAS segment count","Status","Creates CAS"];
-    const lines=[headers,...parsed.map(r=>[r.line,r.billed,r.totalSvd,r.totalCas,r.difference,r.casIndices.length,r.status,r.createNewCAS?"Yes":"No"])]
+    const headers=["Claim ID","LX number","Billed","Total SVD","Total CAS","Difference","LX HCP02","CAS segment count","Status","Creates CAS"];
+    const lines=[headers,...parsed.map(r=>[r.claimId,r.lxNumber,r.billed,r.totalSvd,r.totalCas,r.difference,r.hcp,r.casIndices.length,r.status,r.createNewCAS?"Yes":"No"])]
       .map(row=>row.map(csvEscape).join(","));
+    lines.push("",["ST/SE TRANSACTION VALIDATION"].map(csvEscape).join(","));
+    lines.push(["Transaction","ST02","SE02","SE01 declared","Actual count","Count result","Control result","Status"].map(csvEscape).join(","));
+    transactions.forEach(t=>lines.push([t.index,t.stControl,t.seControl,t.declaredCount,t.actualCount,t.countStatus,t.controlStatus,t.status].map(csvEscape).join(",")));
     downloadBlob(lines.join("\r\n"),fileName.replace(/(\.[^.]+)?$/,"_audit.csv"),"text/csv;charset=utf-8");
   }
   $("file").addEventListener("change", async e=>{
@@ -294,7 +419,7 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
   $("applyBtn").addEventListener("click",applyAdjustments);
   $("csvBtn").addEventListener("click",downloadCSV);
   $("backupBtn").addEventListener("click",()=>{if(originalText!==null)downloadBlob(originalText,fileName.replace(/(\.[^.]+)?$/,"_original$1"),"text/plain;charset=utf-8");});
-  $("clearBtn").addEventListener("click",()=>{originalText=null;parsed=[];audited=false;$("file").value="";$("fileInfo").textContent="No file selected.";$("results").innerHTML='<tr><td colspan="8" class="muted">No results yet.</td></tr>';$("summary").textContent="Run Preview / Audit to inspect the file.";$("typePill").textContent="No file audited";$("applyBtn").disabled=$("csvBtn").disabled=$("backupBtn").disabled=true;});
+  $("clearBtn").addEventListener("click",()=>{originalText=null;parsed=[];claims=[];transactions=[];audited=false;$("file").value="";$("fileInfo").textContent="No file selected.";$("results").innerHTML='<tr><td colspan="9" class="muted">No results yet.</td></tr>';$("claimResults").innerHTML='<tr><td colspan="9" class="muted">No claims audited yet.</td></tr>';$("transactionResults").innerHTML='<tr><td colspan="8" class="muted">No transactions audited yet.</td></tr>';$("transactionSummary").textContent="Checks SE01 segment count and ST02 / SE02 control-number matching.";$("claimSummary").textContent="Pending - 0";$("summary").textContent="Run Preview / Audit to inspect the file.";$("typePill").textContent="No file audited";$("applyBtn").disabled=$("csvBtn").disabled=$("backupBtn").disabled=true;});
   $("createCAS").addEventListener("change",()=>{if(audited)audit();});
   $("confirmCAS").addEventListener("change",()=>{if(audited)audit();});
   $("type").addEventListener("change",()=>{if(audited)audit();});

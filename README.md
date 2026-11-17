@@ -66,6 +66,18 @@ When you change `index.html` or another project file:
 2. Cloudflare Pages will automatically start a new deployment.
 3. Refresh the Pages URL after deployment completes.
 
+## Validation coverage
+
+- Supports professional 837P service-line billed amounts from SV102.
+- Supports institutional 837I service-line billed amounts from SV203.
+- Groups LX service lines under their own CLM claim; amounts from separate claims are never combined.
+- Displays claim-level CLM02 versus the sum of that claim's LX billed amounts.
+- Displays claim-level HCP02 versus the sum of that claim's LX HCP02 values when present.
+- Continues to audit each LX independently using its billed amount, SVD02 total, and CAS adjustment total.
+- Claim-level mismatches are flagged for review; the tool does not automatically rewrite CLM02 or SV102/SV203. Existing user-triggered CAS adjustment and download behavior remains separate.
+- Validates every ST/SE transaction pair: SE01 against the actual segment count from ST through SE (inclusive), and ST02 against SE02.
+- Reports missing ST or SE segments and invalid/mismatched SE01 counts without automatically changing transaction structure.
+
 ## Important data-handling notes
 
 - The application reads and processes the selected EDI file in the browser.
