@@ -252,7 +252,7 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
       // Always show the current eligible CO*45 amount, even when no adjustment is needed.
       // When an adjustment is pending, show current → proposed; only the last CO*45 value is eligible.
       const co45Action = status !== "PENDING"
-        ? (co45Target ? `${money(co45Target.amount, Number($("precision").value))} (unchanged)` : "NO CO*45")
+        ? (co45Target ? `${money(co45Target.amount, Number($("precision").value))}` : "NO CO*45")
         : co45Target
           ? (co45WouldBeNegative ? `REVIEW — ${money(co45Target.amount, Number($("precision").value))} → ${money(proposedCO45, Number($("precision").value))} (negative)` : `${money(co45Target.amount, Number($("precision").value))} → ${money(proposedCO45, Number($("precision").value))}`)
           : createNewCAS
