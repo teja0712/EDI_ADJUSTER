@@ -80,7 +80,7 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
     </div>
     <div class="tablewrap" style="margin-top:14px">
       <table>
-        <thead><tr><th>#</th><th>Claim</th><th>Service line</th><th>Billed</th><th>Total SVD</th><th>Total CAS</th><th>Difference</th><th>CAS count</th><th>CO*45 adjustment</th><th>Status</th></tr></thead>
+        <thead><tr><th>#</th><th>Claim</th><th>Service line</th><th>Billed</th><th>Total SVD</th><th>Total CAS</th><th>Difference</th><th>CAS count</th><th>CO*45 amount / adjustment</th><th>Status</th></tr></thead>
         <tbody id="results"><tr><td colspan="10" class="muted">No results yet.</td></tr></tbody>
       </table>
     </div>
@@ -249,7 +249,15 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
       const proposedCO45 = co45Target && difference !== null ? Number((co45Target.amount + difference).toFixed(Number($("precision").value))) : null;
       const createNewCAS = status === "PENDING" && r.cas.length === 0 && $("createCAS").checked && $("confirmCAS").checked && $("groupCode").value === "CO" && $("reasonCode").value.trim() === "45";
       const co45WouldBeNegative = co45Target ? proposedCO45 < -0.0000001 : createNewCAS && difference !== null && difference < -0.0000001;
-      const co45Action = status !== "PENDING" ? "—" : co45Target ? (co45WouldBeNegative ? `REVIEW — ${money(co45Target.amount, Number($("precision").value))} → ${money(proposedCO45, Number($("precision").value))} (negative)` : `${money(co45Target.amount, Number($("precision").value))} → ${money(proposedCO45, Number($("precision").value))}`) : createNewCAS ? (co45WouldBeNegative ? `REVIEW — new CO*45 would be ${money(difference, Number($("precision").value))} (negative)` : `Create CO*45 ${money(difference, Number($("precision").value))}`) : "NO CO*45 — manual review";
+      // Always show the current eligible CO*45 amount, even when no adjustment is needed.
+      // When an adjustment is pending, show current → proposed; only the last CO*45 value is eligible.
+      const co45Action = status !== "PENDING"
+        ? (co45Target ? `${money(co45Target.amount, Number($("precision").value))} (unchanged)` : "NO CO*45")
+        : co45Target
+          ? (co45WouldBeNegative ? `REVIEW — ${money(co45Target.amount, Number($("precision").value))} → ${money(proposedCO45, Number($("precision").value))} (negative)` : `${money(co45Target.amount, Number($("precision").value))} → ${money(proposedCO45, Number($("precision").value))}`)
+          : createNewCAS
+            ? (co45WouldBeNegative ? `REVIEW — new CO*45 would be ${money(difference, Number($("precision").value))} (negative)` : `Create CO*45 ${money(difference, Number($("precision").value))}`)
+            : "NO CO*45 — manual review";
       const canApply = status === "PENDING" && (co45Target !== null || createNewCAS) && !co45WouldBeNegative;
       return {...r,totalSvd,totalCas,difference,status,createNewCAS,co45Target,proposedCO45,co45WouldBeNegative,co45Action,canApply};
     });
