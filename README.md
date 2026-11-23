@@ -74,7 +74,10 @@ When you change `index.html` or another project file:
 - Displays claim-level CLM02 versus the sum of that claim's LX billed amounts.
 - Displays claim-level HCP02 versus the sum of that claim's LX HCP02 values when present.
 - Continues to audit each LX independently using its billed amount, SVD02 total, and CAS adjustment total.
-- Claim-level mismatches are flagged for review; the tool does not automatically rewrite CLM02 or SV102/SV203. Existing user-triggered CAS adjustment and download behavior remains separate.
+- Claim-level mismatches are flagged for review; the tool does not automatically rewrite CLM02 or SV102/SV203.
+- User-triggered adjustments target only the last CO*45 amount in the last CAS segment containing CO*45 within each LX service line. Other CAS groups/reason codes and amounts are preserved.
+- If the proposed CO*45 amount would become negative, the row is highlighted for manual review and that LX adjustment is skipped.
+- If creating a CAS segment is enabled for a line with no CAS segment, only a CO*45 segment may be created; negative proposed amounts are flagged and not created.
 - Validates every ST/SE transaction pair: SE01 against the actual segment count from ST through SE (inclusive), and ST02 against SE02.
 - Reports missing ST or SE segments and invalid/mismatched SE01 counts without automatically changing transaction structure.
 
