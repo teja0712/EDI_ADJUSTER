@@ -277,7 +277,14 @@ footer{font-size:12px;color:#6a7485;margin:20px 0}
     const txGood = transactions.filter(t=>t.status==="MATCH").length;
     $("transactionSummary").textContent = transactions.length ? `${transactions.length} transaction(s) found • ${txGood} fully matched • ${transactions.length-txGood} need review` : "No ST/SE transaction pair found in this file.";
     $("typePill").textContent = detectedType + (detectedType==="Unknown" ? " — check type" : "");
-    $("summary").textContent = `${claims.length} claim(s) found • ${parsed.length} LX service-line group(s) • ${parsed.filter(r=>r.status==="MATCH").length} line matches • ${parsed.filter(r=>r.status==="PENDING").length} pending CAS adjustment(s) • ${claims.filter(c=>c.status!=="MATCH").length} claim(s) need review`;
+    // Mutually exclusive service-line counts: every mismatched LX is counted once.
+    // No-CAS / no-CO*45 rows are part of Skipped, not a second separate category.
+    // Negative proposals are separated from Pending because they require manual review.
+    const mismatchedLines = parsed.filter(r => r.difference !== null && Math.abs(r.difference) >= 0.005);
+    const negativeCount = mismatchedLines.filter(r => r.co45WouldBeNegative).length;
+    const linePending = mismatchedLines.filter(r => r.canApply && !r.co45WouldBeNegative).length;
+    const lineSkipped = mismatchedLines.filter(r => !r.canApply && !r.co45WouldBeNegative).length;
+    $("summary").textContent = `${claims.length} claim(s) found • ${parsed.length} LX service-line group(s) • ${parsed.filter(r=>r.status==="MATCH").length} line matches • Pending - ${linePending} • Skipped - ${lineSkipped} (includes no CAS / no CO*45) • Negative - ${negativeCount} • ${claims.filter(c=>c.status!=="MATCH").length} claim(s) need review`;
     $("applyBtn").disabled = !parsed.some(r=>r.canApply);
     $("csvBtn").disabled = false; $("backupBtn").disabled = false;
     $("fileInfo").textContent = `${fileName} • ${originalText.length.toLocaleString()} characters`;
